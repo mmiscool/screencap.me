@@ -357,7 +357,7 @@ function renderClipList() {
     thumb.style.position = 'relative';
     const vid = document.createElement('video');
     vid.src = clip.url;
-    vid.controls = true;
+    vid.controls = false; // hide native controls; we rely on the custom trim/time bar
     vid.muted = true;
     vid.playsInline = true;
     vid.preload = 'metadata';
@@ -382,6 +382,15 @@ function renderClipList() {
         videoHeight: vid.videoHeight
       });
     };
+
+    // Simple play/pause toggle so users can preview without native controls
+    vid.addEventListener('click', () => {
+      if (vid.paused) {
+        vid.play().catch(() => {});
+      } else {
+        vid.pause();
+      }
+    });
     
     thumb.appendChild(vid);
 
@@ -620,6 +629,7 @@ function renderClipList() {
 
     const startHandleDrag = (type) => (e) => {
       e.preventDefault();
+      e.stopPropagation();
       const onMove = (ev) => overlayDrag(type, ev.clientX);
       const onUp = () => {
         window.removeEventListener('pointermove', onMove);
@@ -632,6 +642,35 @@ function renderClipList() {
 
     handleStart.addEventListener('pointerdown', startHandleDrag('start'));
     handleEnd.addEventListener('pointerdown', startHandleDrag('end'));
+
+    const seekWithinBar = (clientX) => {
+      if (!Number.isFinite(clip.duration) || clip.duration <= 0) return;
+      const rect = bar.getBoundingClientRect();
+      let pct = (clientX - rect.left) / rect.width;
+      pct = Math.max(0, Math.min(1, pct));
+      vid.currentTime = pct * clip.duration;
+      refreshClipUI();
+    };
+
+    const startPlayheadDrag = (e) => {
+      if (!Number.isFinite(clip.duration) || clip.duration <= 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const onMove = (ev) => seekWithinBar(ev.clientX);
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      seekWithinBar(e.clientX);
+    };
+
+    bar.addEventListener('pointerdown', (e) => {
+      if (e.target === handleStart || e.target === handleEnd) return;
+      startPlayheadDrag(e);
+    });
+    playhead.addEventListener('pointerdown', startPlayheadDrag);
 
     // Update playhead as video plays/seeks
     const updatePlayhead = () => refreshClipUI();

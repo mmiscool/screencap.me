@@ -420,6 +420,7 @@ button:not(:disabled):active {
 
 .clip-thumbnail {
   position: relative;
+  padding-bottom: 22px; /* make room for the custom timeline below the video */
 }
 
 .clip-thumbnail video {
@@ -431,12 +432,16 @@ button:not(:disabled):active {
 
 .trim-overlay {
   position: absolute;
-  inset: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: auto;
+  height: 22px;
   pointer-events: none;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
-  padding: 6px;
+  padding: 0 6px 2px;
 }
 
 .trim-overlay .trim-bar {
@@ -477,9 +482,30 @@ button:not(:disabled):active {
   width: 2px;
   background: #facc15;
   border-radius: 2px;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: grab;
   transform: translateX(-50%);
   box-shadow: 0 0 6px rgba(250, 204, 21, 0.6);
+}
+
+.trim-overlay .trim-playhead::after {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #facc15;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  box-shadow:
+    0 0 10px rgba(250, 204, 21, 0.7),
+    0 2px 6px rgba(0, 0, 0, 0.35);
+  transform: translate(-50%, 0);
+}
+
+.trim-overlay .trim-playhead:active {
+  cursor: grabbing;
 }
 
 .trim-overlay.disabled {
