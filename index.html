@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Browser Screen Recorder + Editor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2310b981'/%3E%3Cpath d='M18 44l10-24 10 24' stroke='%23020617' stroke-width='6' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E" />
+  <!-- FFmpeg modules are loaded on demand inside main.js -->
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+
+    <div class="controls-bar">
+      <button id="btnStartCapture">
+        <span class="dot"></span>
+        Start Screen + Mic
+      </button>
+      <button id="btnStartRecording" class="secondary" disabled>
+        Start Clip
+      </button>
+      <div class="hint" style="margin-left:auto; font-size:11px; color:var(--muted);">
+        Keep capture active to record multiple clips.
+      </div>
+    </div>
+
+    <main>
+      <!-- Left: clips -->
+      <section class="left-panel">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Clips <span id="clipCount">0</span></h2>
+              <small>Each stop of the recorder creates a new clip. Trim & reorder below.</small>
+            </div>
+            <div class="chips">
+              <div class="chip">Trim start / end (seconds)</div>
+              <div class="chip">Reorder timeline</div>
+            </div>
+          </div>
+
+          <div id="clipList"></div>
+        </div>
+
+      </section>
+
+      <!-- Right: capture preview -->
+      <section class="right-panel">
+        <div class="capture-card">
+          <div class="capture-header">
+            <div>
+              <h2>
+                <span class="icon">●</span>
+                Capture Preview
+              </h2>
+              <div class="capture-subtitle">
+                Live screen + mic mix. Use the controls above to start/stop.
+              </div>
+            </div>
+          </div>
+
+          <div class="capture-footer">
+            <div class="status-pill" id="captureStatus">
+              <span class="status-dot-idle"></span>
+              Idle
+            </div>
+            <div class="hint">
+              Tip: Start capture, record clips, then stop capture when done.
+            </div>
+          </div>
+
+          <div class="preview-wrapper">
+            <video id="preview" autoplay muted playsinline></video>
+            <div class="preview-overlay">
+              <div class="preview-overlay-left">
+                <div class="preview-badge">Preview</div>
+                <div class="preview-title">Screen + microphone mix</div>
+              </div>
+              <div class="preview-overlay-right">
+                <div class="pill-soft">
+                  <span class="tiny-dot"></span>
+                  <span id="recordingIndicatorText">Not recording</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="export-panel">
+          <div class="export-top">
+            <div class="export-top-left">
+              <strong>Final export</strong>
+              <small>Uses in-browser rendering (canvas + MediaRecorder) to trim + concatenate all clips.</small>
+            </div>
+            <div class="export-top-right">
+              <button id="btnExport" disabled>
+                <span class="dot"></span>
+                Export Final Video
+              </button>
+            </div>
+          </div>
+          <div class="export-bottom">
+            <div id="status">Ready.</div>
+            <a id="downloadLink" style="display: none;" download="recording.webm">
+              <span>Download</span>
+              <span style="font-size: 11px;">(webm)</span>
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
