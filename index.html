@@ -141,6 +141,33 @@
     </footer>
   </div>
 
+  <div id="renderOverlay" class="render-overlay" aria-hidden="true" hidden>
+    <div class="render-modal">
+      <div class="render-modal-header">
+        <div>
+          <div class="render-title">Rendering final video…</div>
+          <div id="renderSubstatus" class="render-subtitle">Preparing export pipeline…</div>
+        </div>
+        <button id="btnCancelRender" class="secondary">Cancel</button>
+      </div>
+
+      <div class="render-progress">
+        <meter id="renderProgressMeter" min="0" max="100" value="0"></meter>
+        <div class="render-progress-meta">
+          <span id="renderProgressLabel">0%</span>
+          <span id="renderTimeRemaining">Estimating time…</span>
+        </div>
+      </div>
+
+      <div class="render-preview">
+        <div class="render-preview-label">Live render preview</div>
+        <div id="renderPreviewContainer" class="render-preview-frame">
+          <div class="render-preview-placeholder">Preview appears here while exporting.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <video id="webcamPiP" muted playsinline></video>
   <script type="module" src="main.js"></script>
 </body>

@@ -23,6 +23,13 @@ const webcamPiPVideo = document.getElementById('webcamPiP');
 const audioOffsetInput = document.getElementById('audioOffsetInput');
 const btnApplyAudioOffset = document.getElementById('btnApplyAudioOffset');
 const audioOffsetHint = document.getElementById('audioOffsetHint');
+const renderOverlay = document.getElementById('renderOverlay');
+const renderProgressMeter = document.getElementById('renderProgressMeter');
+const renderProgressLabel = document.getElementById('renderProgressLabel');
+const renderSubstatus = document.getElementById('renderSubstatus');
+const renderTimeRemaining = document.getElementById('renderTimeRemaining');
+const renderPreviewContainer = document.getElementById('renderPreviewContainer');
+const btnCancelRender = document.getElementById('btnCancelRender');
 
 let displayStream = null;
 let micStream = null;
@@ -42,6 +49,10 @@ let micDestNode = null;
 let pendingBgTargetId = null;
 let previewBaseDims = null;
 let previewBaseDimsPromise = null;
+let activeRenderCancel = null;
+let renderStartTimeMs = 0;
+let renderTotalSeconds = 0;
+let renderPreviewCanvas = null;
 
 const baseFontOptions = [
   { label: 'Sans (Inter)', value: 'Inter, system-ui, sans-serif' },
@@ -148,6 +159,92 @@ function getPreviewDimensions() {
     });
   }
   return previewBaseDimsPromise;
+}
+
+function resetRenderPreviewContainer() {
+  if (!renderPreviewContainer) return;
+  renderPreviewContainer.innerHTML = '<div class="render-preview-placeholder">Preview appears here while exporting.</div>';
+}
+
+function mountRenderPreviewCanvas(canvas) {
+  if (!renderPreviewContainer || !canvas) return;
+  renderPreviewContainer.innerHTML = '';
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
+  renderPreviewContainer.appendChild(canvas);
+}
+
+function showRenderOverlay(totalSeconds = 0) {
+  renderTotalSeconds = Math.max(0.1, Number.isFinite(totalSeconds) ? totalSeconds : 0.1);
+  renderStartTimeMs = performance.now();
+  if (renderProgressMeter) renderProgressMeter.value = 0;
+  if (renderProgressLabel) renderProgressLabel.textContent = '0%';
+  if (renderTimeRemaining) renderTimeRemaining.textContent = 'Estimating time…';
+  if (renderSubstatus) renderSubstatus.textContent = 'Preparing export pipeline…';
+  if (renderOverlay) {
+    renderOverlay.hidden = false;
+    renderOverlay.style.display = 'flex';
+    renderOverlay.classList.add('active');
+    renderOverlay.setAttribute('aria-hidden', 'false');
+  }
+  document.body.classList.add('rendering-active');
+}
+
+function hideRenderOverlay() {
+  if (renderOverlay) {
+    renderOverlay.classList.remove('active');
+    renderOverlay.setAttribute('aria-hidden', 'true');
+    renderOverlay.style.display = 'none';
+    renderOverlay.hidden = true;
+  }
+  document.body.classList.remove('rendering-active');
+  renderStartTimeMs = 0;
+  renderTotalSeconds = 0;
+  activeRenderCancel = null;
+  if (btnCancelRender) {
+    btnCancelRender.disabled = false;
+    btnCancelRender.textContent = 'Cancel';
+  }
+  resetRenderPreviewContainer();
+  renderPreviewCanvas = null;
+}
+
+function formatEta(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return 'Estimating…';
+  if (seconds >= 90) {
+    return `~${Math.round(seconds / 60)}m left`;
+  }
+  if (seconds >= 1) {
+    return `~${seconds.toFixed(1)}s left`;
+  }
+  return '<1s left';
+}
+
+function updateRenderProgressUI(completedSeconds, label) {
+  const total = renderTotalSeconds > 0 ? renderTotalSeconds : 0;
+  const clamped = Math.max(0, Math.min(total || completedSeconds, completedSeconds));
+  const pct = total > 0 ? Math.min(100, Math.max(0, (clamped / total) * 100)) : 0;
+
+  if (typeof label === 'string' && renderSubstatus) {
+    renderSubstatus.textContent = label;
+  }
+  if (renderProgressMeter) {
+    renderProgressMeter.value = pct;
+  }
+  if (renderProgressLabel) renderProgressLabel.textContent = `${pct.toFixed(0)}%`;
+
+  if (renderTimeRemaining) {
+    let eta = 'Estimating…';
+    if (renderStartTimeMs && clamped > 0 && total > 0) {
+      const elapsedSec = (performance.now() - renderStartTimeMs) / 1000;
+      const rate = clamped / Math.max(0.001, elapsedSec);
+      if (rate > 0) {
+        const remainingSec = Math.max(0, (total - clamped) / rate);
+        eta = formatEta(remainingSec);
+      }
+    }
+    renderTimeRemaining.textContent = eta;
+  }
 }
 
 function setCaptureStatus(mode) {
@@ -837,7 +934,7 @@ function renderClipList() {
       preview.className = 'title-preview';
       preview.style.backgroundImage = 'none';
       preview.style.backgroundColor = 'var(--panel-soft)';
-      preview.style.aspectRatio = '16 / 9';
+      //preview.style.aspectRatio = '16 / 9';
 
       const previewImg = document.createElement('img');
       previewImg.className = 'title-preview-img';
@@ -1693,14 +1790,31 @@ function loadImageElement(url) {
   });
 }
 
+function getClipEffectiveDurationSeconds(clip) {
+  if (!clip) return 0;
+  const start = Math.max(0, Number.isFinite(clip.trimStart) ? clip.trimStart : 0);
+  let end = Number.isFinite(clip.trimEnd) ? clip.trimEnd : null;
+  if ((end == null || !Number.isFinite(end)) && Number.isFinite(clip.duration)) {
+    end = clip.duration;
+  }
+  if (!Number.isFinite(end)) return 0;
+  const span = Math.max(0, end - start);
+  return Number.isFinite(span) ? span : 0;
+}
+
+function getTotalRenderSeconds(list) {
+  if (!Array.isArray(list) || !list.length) return 0;
+  return list.reduce((sum, clip) => sum + getClipEffectiveDurationSeconds(clip), 0);
+}
+
 async function renderTitlePreviewFrame(clip, previewEl, imgEl) {
   if (!previewEl || !imgEl) return;
   try {
     const dims = await getPreviewDimensions();
     const { width, height } = dims;
-    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
-      previewEl.style.aspectRatio = `${width}/${height}`;
-    }
+    // if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+    //   previewEl.style.aspectRatio = `${width}/${height}`;
+    // }
 
     const canvas = document.createElement('canvas');
     canvas.width = Number.isFinite(width) && width > 0 ? width : 1280;
@@ -1796,6 +1910,51 @@ async function exportFinalVideo() {
 
   exportRecording = true;
   btnExport.disabled = true;
+  statusEl.textContent = 'Exporting: preparing renderer…';
+  resetDownloadLink();
+
+  const totalRenderSeconds = Math.max(0.1, getTotalRenderSeconds(clips));
+  resetRenderPreviewContainer();
+  showRenderOverlay(totalRenderSeconds);
+  updateRenderProgressUI(0, 'Preparing renderer…');
+
+  const progressState = {
+    totalSeconds: totalRenderSeconds,
+    completedSeconds: 0,
+    label: 'Preparing renderer…'
+  };
+
+  const updateProgress = (clipElapsed = 0, label) => {
+    if (typeof label === 'string') {
+      progressState.label = label;
+    }
+    const absolute = Math.min(progressState.totalSeconds, progressState.completedSeconds + Math.max(0, clipElapsed));
+    updateRenderProgressUI(absolute, progressState.label);
+  };
+
+  let cancelRequested = false;
+  const cancelError = new Error('Render canceled');
+  cancelError.name = 'RenderCanceled';
+
+  if (btnCancelRender) {
+    btnCancelRender.disabled = false;
+    btnCancelRender.textContent = 'Cancel';
+  }
+
+  activeRenderCancel = () => {
+    if (cancelRequested) return;
+    cancelRequested = true;
+    if (btnCancelRender) {
+      btnCancelRender.disabled = true;
+      btnCancelRender.textContent = 'Canceling…';
+    }
+    updateRenderProgressUI(progressState.completedSeconds, 'Canceling render…');
+    statusEl.textContent = 'Canceling render…';
+  };
+
+  const checkCancel = () => cancelRequested;
+
+  updateProgress(0, 'Sizing output canvas…');
 
   // Determine output dimensions from first clip
   let baseWidth = 1280;
@@ -1824,6 +1983,9 @@ async function exportFinalVideo() {
   canvas.height = baseHeight;
   const ctx = canvas.getContext('2d');
 
+  renderPreviewCanvas = canvas;
+  mountRenderPreviewCanvas(canvas);
+
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   const audioDest = audioCtx.createMediaStreamDestination();
 
@@ -1845,7 +2007,20 @@ async function exportFinalVideo() {
     }
   };
 
-  const renderVideoClip = clip => new Promise(async (resolve, reject) => {
+  const stopRecorder = () => new Promise(resolve => {
+    if (!recorder || recorder.state === 'inactive') {
+      resolve();
+      return;
+    }
+    recorder.onstop = () => resolve();
+    try {
+      recorder.stop();
+    } catch (_) {
+      resolve();
+    }
+  });
+
+  const renderVideoClip = (clip, { expectedDuration, onProgress } = {}) => new Promise(async (resolve, reject) => {
     const video = document.createElement('video');
     video.src = clip.url;
     video.muted = false;
@@ -1858,7 +2033,7 @@ async function exportFinalVideo() {
     let intervalId = null;
     let finished = false;
     let watchdog = null;
-    const cleanup = (err) => {
+    const finish = (err) => {
       if (finished) return;
       finished = true;
       if (intervalId) clearInterval(intervalId);
@@ -1868,6 +2043,9 @@ async function exportFinalVideo() {
       video.ontimeupdate = null;
       video.src = '';
       try { source.disconnect(); } catch (_) {}
+      if (!err && typeof onProgress === 'function' && Number.isFinite(expectedDuration)) {
+        onProgress(expectedDuration);
+      }
       if (err) {
         reject(err);
       } else {
@@ -1890,6 +2068,10 @@ async function exportFinalVideo() {
 
       const hasEndGuard = Number.isFinite(end);
       const effectiveEnd = hasEndGuard ? Math.max(start + 0.01, end) : Infinity;
+      const clipDuration = Number.isFinite(expectedDuration)
+        ? expectedDuration
+        : (hasEndGuard ? Math.max(0, effectiveEnd - start) : 0);
+
       if (hasEndGuard && start >= effectiveEnd) {
         source.disconnect();
         resolve();
@@ -1901,14 +2083,25 @@ async function exportFinalVideo() {
       const watchdogMs = hasEndGuard
         ? Math.max(3000, (effectiveEnd - start + 2) * 1000)
         : 60000; // cap unknown durations to 60s safety timeout
-      watchdog = setTimeout(() => cleanup(new Error('Clip render timed out')), watchdogMs);
+      watchdog = setTimeout(() => finish(new Error('Clip render timed out')), watchdogMs);
 
       const draw = () => {
         if (finished) return;
+        if (checkCancel()) {
+          finish(cancelError);
+          return;
+        }
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        if (typeof onProgress === 'function') {
+          const elapsed = Math.max(0, Math.min(video.currentTime, effectiveEnd) - start);
+          const safeElapsed = Number.isFinite(clipDuration) && clipDuration > 0
+            ? Math.min(clipDuration, elapsed)
+            : elapsed;
+          onProgress(safeElapsed);
+        }
         if (hasEndGuard && video.currentTime >= effectiveEnd) {
           clearTimeout(watchdog);
-          cleanup();
+          finish();
           return;
         }
         if (useRVFC) {
@@ -1918,7 +2111,7 @@ async function exportFinalVideo() {
 
       video.onended = () => {
         clearTimeout(watchdog);
-        cleanup();
+        finish();
       };
 
       video.currentTime = start;
@@ -1947,19 +2140,21 @@ async function exportFinalVideo() {
         }
       } catch (err) {
         clearTimeout(watchdog);
-        cleanup(err);
+        finish(err);
       }
     };
 
     video.onerror = () => {
-      cleanup(new Error('Failed to play clip'));
+      finish(new Error('Failed to play clip'));
     };
   });
 
-  const renderTitleClip = clip => new Promise(async (resolve) => {
-    const duration = Number.isFinite(clip.duration)
-      ? clip.duration
-      : (Number.isFinite(clip.trimEnd) ? clip.trimEnd : 3);
+  const renderTitleClip = (clip, { expectedDuration, onProgress } = {}) => new Promise(async (resolve, reject) => {
+    const duration = Number.isFinite(expectedDuration)
+      ? expectedDuration
+      : (Number.isFinite(clip.duration)
+        ? clip.duration
+        : (Number.isFinite(clip.trimEnd) ? clip.trimEnd : 3));
     const effectiveDuration = Math.max(0.1, duration);
 
     let img = null;
@@ -1978,6 +2173,20 @@ async function exportFinalVideo() {
     const color = clip.textColor || '#ffffff';
     const lineHeight = fontSize * 1.2;
     const startTime = performance.now();
+    let done = false;
+
+    const finish = (err) => {
+      if (done) return;
+      done = true;
+      if (!err && typeof onProgress === 'function') {
+        onProgress(effectiveDuration);
+      }
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    };
 
     const drawFrame = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -2005,10 +2214,18 @@ async function exportFinalVideo() {
     };
 
     const tick = () => {
+      if (done) return;
+      if (checkCancel()) {
+        finish(cancelError);
+        return;
+      }
       const elapsed = (performance.now() - startTime) / 1000;
       drawFrame();
+      if (typeof onProgress === 'function') {
+        onProgress(Math.min(effectiveDuration, elapsed));
+      }
       if (elapsed >= effectiveDuration) {
-        resolve();
+        finish();
         return;
       }
       requestAnimationFrame(tick);
@@ -2021,6 +2238,7 @@ async function exportFinalVideo() {
   try {
     // Diagnostics to understand clip inputs before rendering
     const diagnostics = [];
+    updateRenderProgressUI(progressState.completedSeconds, 'Analyzing clips…');
     for (let i = 0; i < clips.length; i++) {
       const clip = clips[i];
       let meta = { duration: clip.duration, width: null, height: null };
@@ -2067,6 +2285,10 @@ async function exportFinalVideo() {
       });
     }
 
+    progressState.totalSeconds = Math.max(0.1, getTotalRenderSeconds(clips));
+    renderTotalSeconds = progressState.totalSeconds;
+    updateRenderProgressUI(progressState.completedSeconds, progressState.label);
+
     console.log('Export diagnostics', {
       clipCount: clips.length,
       mimeType,
@@ -2076,24 +2298,47 @@ async function exportFinalVideo() {
     });
 
     statusEl.textContent = 'Exporting: rendering clips in-browser…';
+    updateRenderProgressUI(progressState.completedSeconds, 'Rendering clips…');
     recorder.start();
 
     for (let i = 0; i < clips.length; i++) {
       const clip = clips[i];
+      const clipDuration = Math.max(0.01, getClipEffectiveDurationSeconds(clip));
       const label = clip.type === 'title' ? 'title block' : 'clip';
-      statusEl.textContent = `Rendering ${label} ${i + 1}/${clips.length}…`;
-      if (clip.type === 'title') {
-        await renderTitleClip(clip);
-      } else {
-        await renderVideoClip(clip);
+      const clipLabel = `Rendering ${label} ${i + 1}/${clips.length}…`;
+      progressState.label = clipLabel;
+      statusEl.textContent = clipLabel;
+      updateRenderProgressUI(progressState.completedSeconds, progressState.label);
+
+      if (checkCancel()) {
+        throw cancelError;
       }
+
+      const onProgress = (elapsedSeconds) => {
+        const clampedElapsed = Math.min(clipDuration, Math.max(0, elapsedSeconds || 0));
+        const absolute = Math.min(progressState.totalSeconds, progressState.completedSeconds + clampedElapsed);
+        updateRenderProgressUI(absolute, progressState.label);
+      };
+
+      if (clip.type === 'title') {
+        await renderTitleClip(clip, { expectedDuration: clipDuration, onProgress });
+      } else {
+        await renderVideoClip(clip, { expectedDuration: clipDuration, onProgress });
+      }
+
+      progressState.completedSeconds = Math.min(progressState.totalSeconds, progressState.completedSeconds + clipDuration);
+      updateRenderProgressUI(progressState.completedSeconds, progressState.label);
     }
 
+    progressState.label = 'Finalizing recording…';
+    updateRenderProgressUI(progressState.totalSeconds, progressState.label);
     statusEl.textContent = 'Finalizing recording…';
-    await new Promise(resolve => {
-      recorder.onstop = resolve;
-      recorder.stop();
-    });
+    await stopRecorder();
+
+    if (cancelRequested) {
+      statusEl.textContent = 'Export canceled.';
+      return;
+    }
 
     const outputBlob = new Blob(recordedChunks, { type: recorder.mimeType });
     const url = URL.createObjectURL(outputBlob);
@@ -2105,11 +2350,17 @@ async function exportFinalVideo() {
 
     statusEl.textContent = 'Done. Final video is downloading.';
   } catch (err) {
-    console.error(err);
-    statusEl.textContent = 'Export failed: ' + err.message;
+    await stopRecorder().catch(() => {});
+    if (err && err.name === 'RenderCanceled') {
+      statusEl.textContent = 'Export canceled.';
+    } else {
+      console.error(err);
+      statusEl.textContent = 'Export failed: ' + err.message;
+    }
   } finally {
     exportRecording = false;
     btnExport.disabled = false;
+    hideRenderOverlay();
     canvasStream.getTracks().forEach(t => t.stop());
     mixedStream.getTracks().forEach(t => t.stop());
     try { audioCtx.close(); } catch (_) {}
@@ -2119,6 +2370,13 @@ async function exportFinalVideo() {
 // -----------------------------
 // Events
 // -----------------------------
+if (btnCancelRender) {
+  btnCancelRender.addEventListener('click', () => {
+    if (activeRenderCancel) {
+      activeRenderCancel();
+    }
+  });
+}
 btnStartCapture.addEventListener('click', startCapture);
 btnStartRecording.addEventListener('click', startRecording);
 btnExport.addEventListener('click', exportFinalVideo);
