@@ -8,6 +8,7 @@ This repo contains a no-nonsense browser app for grabbing your screen + micropho
 - Start capturing screen + mic instantly; every stop creates a new clip
 - Trim start/end points per clip and reorder the timeline
 - Optional Webcam PiP so you can float your face cam while recording the screen
+- Adjustable mic delay (ms) to line up your audio with Webcam PiP if the camera feed lags
 - Export the final video fully in-browser (canvas + MediaRecorder) as webm
 - Save/load projects as a single JSON file (clips are embedded as base64)
 - Zero installs or builds—just open `index.html` on `localhost`

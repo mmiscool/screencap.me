@@ -16,6 +16,9 @@ const btnExportProject = document.getElementById('btnExportProject');
 const projectFileInput = document.getElementById('projectFileInput');
 const btnWebcamPiP = document.getElementById('btnWebcamPiP');
 const webcamPiPVideo = document.getElementById('webcamPiP');
+const audioOffsetInput = document.getElementById('audioOffsetInput');
+const btnApplyAudioOffset = document.getElementById('btnApplyAudioOffset');
+const audioOffsetHint = document.getElementById('audioOffsetHint');
 
 let displayStream = null;
 let micStream = null;
@@ -27,6 +30,11 @@ let isRecording = false;
 let stopOverlay = null;
 let dragSourceClipId = null;
 let webcamStream = null;
+let audioOffsetMs = 120; // delays mic audio to help sync with PiP webcam
+let captureAudioCtx = null;
+let micSourceNode = null;
+let micDelayNode = null;
+let micDestNode = null;
 
 const clips = []; // { id, blob, url, duration, trimStart, trimEnd }
 
@@ -148,6 +156,100 @@ async function dataUrlToBlob(dataUrl) {
   }
 }
 
+const clampAudioOffset = (val) => {
+  const num = Number.isFinite(val) ? val : 0;
+  return Math.max(0, Math.min(1000, num));
+};
+
+function updateAudioOffsetUI() {
+  if (audioOffsetInput) {
+    audioOffsetInput.value = audioOffsetMs.toString();
+  }
+  if (audioOffsetHint) {
+    audioOffsetHint.textContent = audioOffsetMs > 0
+      ? `${audioOffsetMs}ms mic delay will apply when Webcam PiP is active.`
+      : 'No mic delay (0ms).';
+  }
+}
+
+function shouldDelayMicAudio() {
+  return audioOffsetMs > 0 && (document.pictureInPictureElement === webcamPiPVideo || webcamStream);
+}
+
+function teardownCaptureAudioGraph() {
+  try { if (micSourceNode) micSourceNode.disconnect(); } catch (_) {}
+  try { if (micDelayNode) micDelayNode.disconnect(); } catch (_) {}
+  try { if (micDestNode) micDestNode.disconnect(); } catch (_) {}
+  micSourceNode = null;
+  micDelayNode = null;
+  micDestNode = null;
+  if (captureAudioCtx) {
+    captureAudioCtx.close().catch(() => {});
+    captureAudioCtx = null;
+  }
+}
+
+function applyMicAudioToStream(targetStream) {
+  if (!micStream) return;
+  const micTracks = micStream.getAudioTracks();
+  if (!micTracks.length) return;
+
+  if (shouldDelayMicAudio()) {
+    teardownCaptureAudioGraph();
+    captureAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    micSourceNode = captureAudioCtx.createMediaStreamSource(micStream);
+    micDelayNode = captureAudioCtx.createDelay(1.5);
+    const delaySeconds = Math.min(audioOffsetMs / 1000, micDelayNode.delayTime.maxValue || 1.5);
+    micDelayNode.delayTime.value = delaySeconds;
+    micDestNode = captureAudioCtx.createMediaStreamDestination();
+    micSourceNode.connect(micDelayNode).connect(micDestNode);
+    if (captureAudioCtx.state === 'suspended') {
+      captureAudioCtx.resume().catch(() => {});
+    }
+    micDestNode.stream.getAudioTracks().forEach(t => targetStream.addTrack(t));
+  } else {
+    teardownCaptureAudioGraph();
+    micTracks.forEach(t => targetStream.addTrack(t));
+  }
+}
+
+function rebuildCombinedStream() {
+  if (!displayStream) return null;
+  const newStream = new MediaStream();
+  displayStream.getVideoTracks().forEach(t => newStream.addTrack(t));
+  applyMicAudioToStream(newStream);
+  combinedStream = newStream;
+  previewVideo.srcObject = combinedStream;
+  return combinedStream;
+}
+
+function rebuildCombinedStreamIfIdle() {
+  if (!displayStream || !micStream) return;
+  if (isRecording) {
+    statusEl.textContent = 'Mic offset update will apply after the current recording stops.';
+    return;
+  }
+  rebuildCombinedStream();
+}
+
+function applyAudioOffsetFromInput() {
+  const nextVal = clampAudioOffset(parseFloat(audioOffsetInput.value));
+  audioOffsetMs = nextVal;
+  updateAudioOffsetUI();
+  if (displayStream && micStream) {
+    rebuildCombinedStreamIfIdle();
+  }
+  if (nextVal > 0) {
+    if (shouldDelayMicAudio()) {
+      statusEl.textContent = `Mic audio delayed ${nextVal}ms for webcam sync.`;
+    } else {
+      statusEl.textContent = `Mic delay set to ${nextVal}ms. Open Webcam PiP to apply it.`;
+    }
+  } else {
+    statusEl.textContent = 'Mic delay disabled.';
+  }
+}
+
 // -----------------------------
 // Capture setup
 // -----------------------------
@@ -176,9 +278,7 @@ async function startCapture() {
 
     displayStream = screenStream;
     micStream = mic;
-    combinedStream = newStream;
-
-    previewVideo.srcObject = combinedStream;
+    rebuildCombinedStream();
 
     btnStartCapture.disabled = true;
     btnStartRecording.disabled = false;
@@ -205,6 +305,7 @@ function stopCapture() {
   stopAllTracks(displayStream);
   stopAllTracks(micStream);
   stopAllTracks(combinedStream);
+  teardownCaptureAudioGraph();
 
   displayStream = null;
   micStream = null;
@@ -246,6 +347,7 @@ async function toggleWebcamPiP() {
       cleanupWebcamStream();
       setWebcamPiPButtonState(false);
       statusEl.textContent = 'Webcam PiP closed.';
+      rebuildCombinedStreamIfIdle();
       return;
     }
 
@@ -263,6 +365,10 @@ async function toggleWebcamPiP() {
     await webcamPiPVideo.requestPictureInPicture();
     setWebcamPiPButtonState(true);
     statusEl.textContent = 'Webcam is in Picture-in-Picture.';
+    rebuildCombinedStreamIfIdle();
+    if (shouldDelayMicAudio() && displayStream && micStream && !isRecording) {
+      statusEl.textContent = `Webcam is in Picture-in-Picture. Applied ${audioOffsetMs}ms mic delay for sync.`;
+    }
   } catch (err) {
     console.error(err);
     statusEl.textContent = 'Webcam PiP failed: ' + err.message;
@@ -278,6 +384,7 @@ function stopWebcamPiP() {
   }
   cleanupWebcamStream();
   setWebcamPiPButtonState(false);
+  rebuildCombinedStreamIfIdle();
 }
 
 function selectMimeType() {
@@ -295,6 +402,9 @@ function selectMimeType() {
 }
 
 function startRecording() {
+  if (!combinedStream && displayStream) {
+    rebuildCombinedStream();
+  }
   if (!combinedStream) {
     statusEl.textContent = 'Capture is not active.';
     return;
@@ -1363,10 +1473,16 @@ projectFileInput.addEventListener('change', () => {
   }
 });
 btnWebcamPiP.addEventListener('click', toggleWebcamPiP);
+btnApplyAudioOffset.addEventListener('click', applyAudioOffsetFromInput);
+audioOffsetInput.addEventListener('change', applyAudioOffsetFromInput);
+audioOffsetInput.addEventListener('blur', () => {
+  audioOffsetInput.value = clampAudioOffset(parseFloat(audioOffsetInput.value)).toString();
+});
 webcamPiPVideo.addEventListener('leavepictureinpicture', () => {
   cleanupWebcamStream();
   setWebcamPiPButtonState(false);
   statusEl.textContent = 'Webcam PiP closed.';
+  rebuildCombinedStreamIfIdle();
 });
 
 window.addEventListener('beforeunload', () => {
@@ -1380,3 +1496,4 @@ renderClipList();
 setCaptureStatus('idle');
 updateRecordingIndicator();
 setWebcamPiPButtonState(false);
+updateAudioOffsetUI();

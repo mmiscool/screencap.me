@@ -15,18 +15,24 @@
     <div id="app">
 
     <div class="controls-bar">
-      <button id="btnStartCapture">
-        <span class="dot"></span>
-        Start Screen + Mic
-      </button>
-      <button id="btnStartRecording" class="secondary" disabled>
-        Start Clip
-      </button>
-      <button id="btnWebcamPiP" class="secondary">
-        Webcam PiP
-      </button>
-      <div class="hint" style="margin-left:auto; font-size:11px; color:var(--muted);">
-        Keep capture active to record multiple clips.
+      <div class="controls-left">
+        <button id="btnStartCapture">
+          <span class="dot"></span>
+          Start Screen + Mic
+        </button>
+        <button id="btnStartRecording" class="secondary" disabled>
+          Start Clip
+        </button>
+        <button id="btnWebcamPiP" class="secondary">
+          Webcam PiP
+        </button>
+      </div>
+      <div class="controls-right">
+        <div class="toolbar-project-actions">
+          <input type="file" id="projectFileInput" accept="application/json" style="display: none;" />
+          <button id="btnImportProject" class="secondary">Import Project</button>
+          <button id="btnExportProject" class="secondary">Export Project</button>
+        </div>
       </div>
     </div>
 
@@ -100,25 +106,22 @@
               </button>
             </div>
           </div>
-          <div class="export-bottom">
-            <div id="status">Ready.</div>
-            <a id="downloadLink" style="display: none;" download="recording.webm">
-              <span>Download</span>
-              <span style="font-size: 11px;">(webm)</span>
+        <div class="export-bottom">
+          <div id="status">Ready.</div>
+          <a id="downloadLink" style="display: none;" download="recording.webm">
+            <span>Download</span>
+            <span style="font-size: 11px;">(webm)</span>
             </a>
         </div>
+        </div>
 
-          <div class="project-actions">
-            <div class="project-actions-left">
-              <strong>Project</strong>
-              <small>Save or reload your clips as a JSON file (videos are base64-encoded).</small>
-            </div>
-            <div class="project-actions-right">
-              <input type="file" id="projectFileInput" accept="application/json" style="display: none;" />
-              <button id="btnImportProject" class="secondary">Import Project</button>
-              <button id="btnExportProject">Export Project</button>
-            </div>
+        <div class="audio-sync audio-sync-right audio-sync-standalone">
+          <label for="audioOffsetInput">Mic offset (ms)</label>
+          <div class="audio-sync-controls">
+            <input id="audioOffsetInput" type="number" min="0" max="1000" step="10" value="120" />
+            <button id="btnApplyAudioOffset" class="secondary small" type="button">Set</button>
           </div>
+          <div class="hint" id="audioOffsetHint">Delays mic slightly to match Webcam PiP.</div>
         </div>
       </section>
     </main>
