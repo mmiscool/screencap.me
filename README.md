@@ -2,6 +2,9 @@
 
 This repo is configured for the `screencap.me` CNAME and ships a no-nonsense browser app for grabbing your screen + microphone, optionally floating your webcam in Picture-in-Picture, chopping clips, and exporting one stitched video without touching FFmpeg or a backend.
 
+![](video.webp)
+
+
 ## Why use it
 - Start capturing screen + mic instantly; every stop creates a new clip
 - Trim start/end points per clip and reorder the timeline
