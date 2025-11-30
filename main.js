@@ -40,6 +40,8 @@ let micSourceNode = null;
 let micDelayNode = null;
 let micDestNode = null;
 let pendingBgTargetId = null;
+let previewBaseDims = null;
+let previewBaseDimsPromise = null;
 
 const baseFontOptions = [
   { label: 'Sans (Inter)', value: 'Inter, system-ui, sans-serif' },
@@ -100,6 +102,54 @@ async function detectAvailableFonts(candidates) {
   return available;
 }
 
+function resetPreviewDimensionsCache() {
+  previewBaseDims = null;
+  previewBaseDimsPromise = null;
+}
+
+async function computePreviewDimensions() {
+  const fallback = { width: 1280, height: 720 };
+  const firstVideo = clips.find(c => c.type !== 'title' && c.url);
+  if (firstVideo) {
+    try {
+      const meta = await loadVideoMetadata(firstVideo.url);
+      if (Number.isFinite(meta.width) && Number.isFinite(meta.height)) {
+        return { width: meta.width, height: meta.height };
+      }
+    } catch (_) {
+      // ignore and fall back
+    }
+  }
+
+  const firstTitleWithBg = clips.find(c => c.type === 'title' && c.bgDataUrl);
+  if (firstTitleWithBg) {
+    try {
+      const imgMeta = await loadImageDimensions(firstTitleWithBg.bgDataUrl);
+      if (Number.isFinite(imgMeta.width) && Number.isFinite(imgMeta.height)) {
+        return { width: imgMeta.width, height: imgMeta.height };
+      }
+    } catch (_) {
+      // ignore and fall back
+    }
+  }
+
+  return fallback;
+}
+
+function getPreviewDimensions() {
+  if (previewBaseDims) return Promise.resolve(previewBaseDims);
+  if (!previewBaseDimsPromise) {
+    previewBaseDimsPromise = computePreviewDimensions().then(res => {
+      previewBaseDims = res;
+      return res;
+    }).catch(() => {
+      previewBaseDims = { width: 1280, height: 720 };
+      return previewBaseDims;
+    });
+  }
+  return previewBaseDimsPromise;
+}
+
 function setCaptureStatus(mode) {
   // mode: 'idle' | 'live' | 'recording'
   captureStatus.innerHTML = '';
@@ -127,6 +177,38 @@ function revokeClipUrls() {
   clips.forEach(c => {
     if (c.url) URL.revokeObjectURL(c.url);
   });
+}
+
+function drawImageWithFit(ctx, targetW, targetH, img, fit = 'cover') {
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+  if (!iw || !ih) return;
+  const targetRatio = targetW / targetH;
+  const imgRatio = iw / ih;
+  let drawW = targetW;
+  let drawH = targetH;
+
+  if (fit === 'contain') {
+    if (imgRatio > targetRatio) {
+      drawW = targetW;
+      drawH = targetW / imgRatio;
+    } else {
+      drawH = targetH;
+      drawW = targetH * imgRatio;
+    }
+  } else {
+    if (imgRatio > targetRatio) {
+      drawH = targetH;
+      drawW = targetH * imgRatio;
+    } else {
+      drawW = targetW;
+      drawH = targetW / imgRatio;
+    }
+  }
+
+  const dx = (targetW - drawW) / 2;
+  const dy = (targetH - drawH) / 2;
+  ctx.drawImage(img, dx, dy, drawW, drawH);
 }
 
 async function blobToDataUrl(blob) {
@@ -527,6 +609,7 @@ function stopRecording() {
 // Clips
 // -----------------------------
 function addClip(blob, options = {}) {
+  resetPreviewDimensionsCache();
   const url = URL.createObjectURL(blob);
   const defaultTitle = (typeof options.title === 'string' && options.title.trim())
     ? options.title.trim()
@@ -742,6 +825,7 @@ function renderClipList() {
           if (clips[idx].url) URL.revokeObjectURL(clips[idx].url);
           clips.splice(idx, 1);
         }
+        resetPreviewDimensionsCache();
         clipCountEl.textContent = clips.length.toString();
         btnExport.disabled = clips.length === 0;
         renderClipList();
@@ -751,15 +835,18 @@ function renderClipList() {
     if (clip.type === 'title') {
       const preview = document.createElement('div');
       preview.className = 'title-preview';
-      preview.style.backgroundImage = clip.bgDataUrl ? `url(${clip.bgDataUrl})` : 'none';
-      preview.style.backgroundSize = clip.backgroundFit === 'contain' ? 'contain' : 'cover';
-      preview.style.backgroundPosition = 'center';
-      preview.style.backgroundRepeat = 'no-repeat';
-      preview.style.backgroundColor = clip.bgDataUrl ? 'transparent' : 'var(--panel-soft)';
+      preview.style.backgroundImage = 'none';
+      preview.style.backgroundColor = 'var(--panel-soft)';
+      preview.style.aspectRatio = '16 / 9';
+
+      const previewImg = document.createElement('img');
+      previewImg.className = 'title-preview-img';
+      preview.appendChild(previewImg);
 
       const previewText = document.createElement('div');
       previewText.className = 'title-preview-text';
       previewText.textContent = clip.text || '';
+      previewText.style.display = 'none';
       const initialAlign = ['left', 'center', 'right'].includes(clip.textAlign)
         ? clip.textAlign
         : 'center';
@@ -769,6 +856,10 @@ function renderClipList() {
       previewText.style.textAlign = initialAlign;
       previewText.style.fontFamily = clip.fontFamily || 'Inter, system-ui, sans-serif';
       preview.appendChild(previewText);
+
+      const refreshPreview = () => {
+        renderTitlePreviewFrame(clip, preview, previewImg);
+      };
 
       const controls = document.createElement('div');
       controls.className = 'title-controls';
@@ -805,6 +896,7 @@ function renderClipList() {
       fontSelect.addEventListener('change', () => {
         clip.fontFamily = fontSelect.value;
         previewText.style.fontFamily = clip.fontFamily;
+        refreshPreview();
       });
       fontLabel.appendChild(fontSelect);
 
@@ -820,6 +912,7 @@ function renderClipList() {
         clip.textSize = next;
         previewText.style.fontSize = `${next}px`;
         sizeInput.value = next.toString();
+        refreshPreview();
       });
       sizeLabel.appendChild(sizeInput);
 
@@ -835,6 +928,7 @@ function renderClipList() {
       colorInput.addEventListener('input', () => {
         clip.textColor = colorInput.value;
         previewText.style.color = clip.textColor;
+        refreshPreview();
       });
       colorLabel.appendChild(colorInput);
 
@@ -856,6 +950,7 @@ function renderClipList() {
       alignSelect.addEventListener('change', () => {
         clip.textAlign = alignSelect.value;
         previewText.style.textAlign = clip.textAlign;
+        refreshPreview();
       });
       alignLabel.appendChild(alignSelect);
 
@@ -874,6 +969,7 @@ function renderClipList() {
       textArea.addEventListener('input', () => {
         clip.text = textArea.value;
         previewText.textContent = clip.text || '';
+        refreshPreview();
       });
       textLabel.appendChild(textArea);
 
@@ -919,6 +1015,7 @@ function renderClipList() {
         preview.style.backgroundImage = 'none';
         clearBgBtn.disabled = true;
         setBgBtn.textContent = 'Set background';
+        refreshPreview();
       });
 
       const fitSelect = document.createElement('select');
@@ -931,7 +1028,7 @@ function renderClipList() {
       });
       fitSelect.addEventListener('change', () => {
         clip.backgroundFit = fitSelect.value;
-        preview.style.backgroundSize = clip.backgroundFit === 'contain' ? 'contain' : 'cover';
+        refreshPreview();
       });
 
       bgButtons.appendChild(setBgBtn);
@@ -948,6 +1045,7 @@ function renderClipList() {
       item.appendChild(controls);
       attachCommonControls();
       clipListEl.appendChild(item);
+      refreshPreview();
       return;
     }
 
@@ -1431,6 +1529,7 @@ async function importProjectFile(file) {
     btnExport.disabled = true;
     resetDownloadLink();
     renderClipList();
+    resetPreviewDimensionsCache();
 
     for (let i = 0; i < data.clips.length; i++) {
       const entry = data.clips[i];
@@ -1594,6 +1693,64 @@ function loadImageElement(url) {
   });
 }
 
+async function renderTitlePreviewFrame(clip, previewEl, imgEl) {
+  if (!previewEl || !imgEl) return;
+  try {
+    const dims = await getPreviewDimensions();
+    const { width, height } = dims;
+    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      previewEl.style.aspectRatio = `${width}/${height}`;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Number.isFinite(width) && width > 0 ? width : 1280;
+    canvas.height = Number.isFinite(height) && height > 0 ? height : 720;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (clip.bgDataUrl) {
+      try {
+        const img = await loadImageElement(clip.bgDataUrl);
+        drawImageWithFit(ctx, canvas.width, canvas.height, img, clip.backgroundFit === 'contain' ? 'contain' : 'cover');
+      } catch (_) {
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+    } else {
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    const lines = (clip.text || '').split('\n');
+    const fontSize = Number.isFinite(clip.textSize) ? clip.textSize : 48;
+    const fontFamily = clip.fontFamily || 'Inter, system-ui, sans-serif';
+    const align = ['left', 'center', 'right'].includes(clip.textAlign) ? clip.textAlign : 'center';
+    const color = clip.textColor || '#ffffff';
+    const lineHeight = fontSize * 1.2;
+
+    ctx.fillStyle = color;
+    ctx.textAlign = align;
+    ctx.textBaseline = 'middle';
+    ctx.font = `${fontSize}px ${fontFamily}`;
+
+    const totalHeight = lines.length * lineHeight;
+    const baseY = (canvas.height - totalHeight) / 2 + lineHeight / 2;
+    let x = canvas.width / 2;
+    if (align === 'left') x = 40;
+    if (align === 'right') x = canvas.width - 40;
+
+    lines.forEach((line, idx) => {
+      ctx.fillText(line, x, baseY + idx * lineHeight);
+    });
+
+    imgEl.src = canvas.toDataURL('image/png');
+  } catch (err) {
+    console.error('Failed to render title preview', err);
+  }
+}
+
 async function exportFinalVideo() {
   if (!clips.length) return;
   if (exportRecording) return;
@@ -1686,40 +1843,6 @@ async function exportFinalVideo() {
     if (e.data && e.data.size > 0) {
       recordedChunks.push(e.data);
     }
-  };
-
-  const drawImageWithFit = (img, fit) => {
-    const iw = img.naturalWidth || img.width;
-    const ih = img.naturalHeight || img.height;
-    if (!iw || !ih) return;
-    const targetW = canvas.width;
-    const targetH = canvas.height;
-    const targetRatio = targetW / targetH;
-    const imgRatio = iw / ih;
-    let drawW = targetW;
-    let drawH = targetH;
-
-    if (fit === 'contain') {
-      if (imgRatio > targetRatio) {
-        drawW = targetW;
-        drawH = targetW / imgRatio;
-      } else {
-        drawH = targetH;
-        drawW = targetH * imgRatio;
-      }
-    } else {
-      if (imgRatio > targetRatio) {
-        drawH = targetH;
-        drawW = targetH * imgRatio;
-      } else {
-        drawW = targetW;
-        drawH = targetW / imgRatio;
-      }
-    }
-
-    const dx = (targetW - drawW) / 2;
-    const dy = (targetH - drawH) / 2;
-    ctx.drawImage(img, dx, dy, drawW, drawH);
   };
 
   const renderVideoClip = clip => new Promise(async (resolve, reject) => {
@@ -1859,7 +1982,7 @@ async function exportFinalVideo() {
     const drawFrame = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (img && img.complete && img.naturalWidth) {
-        drawImageWithFit(img, clip.backgroundFit === 'contain' ? 'contain' : 'cover');
+        drawImageWithFit(ctx, canvas.width, canvas.height, img, clip.backgroundFit === 'contain' ? 'contain' : 'cover');
       } else {
         ctx.fillStyle = 'black';
         ctx.fillRect(0, 0, canvas.width, canvas.height);

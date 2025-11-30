@@ -726,6 +726,13 @@ button:disabled {
   background: var(--panel-soft);
 }
 
+.title-preview-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
 .title-preview-text {
   width: 100%;
   padding: 14px 16px;
